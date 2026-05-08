@@ -37,7 +37,7 @@ task buildIndex(type: JavaExec) {
 		'build/resources/main/references.json.gz',
 		'build/resources/main/index.bin'
 	]
-	jvmArgs = ['-Xmx512m']
+	jvmArgs = ['-Xmx1g']
 }
 
 classes.dependsOn buildIndex

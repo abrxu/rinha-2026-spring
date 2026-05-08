@@ -4,7 +4,8 @@ import com.abrxu.fraud_detection_rinha.service.VectorStoreService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -35,7 +36,7 @@ class FraudControllerTest {
     void normalize_legitTransaction_noLastTransaction() {
         FraudRequest request = new FraudRequest(
                 "tx-1329056812",
-                new FraudRequest.Transaction(41.12, 2, LocalDateTime.of(2026, 3, 11, 18, 45, 53)),
+                new FraudRequest.Transaction(41.12, 2, time(2026, 3, 11, 18, 45, 53)),
                 new FraudRequest.Customer(82.24, 3, List.of("MERC-003", "MERC-016")),
                 new FraudRequest.Merchant("MERC-016", "5411", 60.25),
                 new FraudRequest.Terminal(false, true, 29.23),
@@ -65,7 +66,7 @@ class FraudControllerTest {
     void normalize_fraudulentTransaction_highValues() {
         FraudRequest request = new FraudRequest(
                 "tx-3330991687",
-                new FraudRequest.Transaction(9505.97, 10, LocalDateTime.of(2026, 3, 14, 5, 15, 12)),
+                new FraudRequest.Transaction(9505.97, 10, time(2026, 3, 14, 5, 15, 12)),
                 new FraudRequest.Customer(81.28, 20, List.of("MERC-008", "MERC-007", "MERC-005")),
                 new FraudRequest.Merchant("MERC-068", "7802", 54.86),
                 new FraudRequest.Terminal(false, true, 952.27),
@@ -95,7 +96,7 @@ class FraudControllerTest {
     void normalize_clampsValuesAboveOne() {
         FraudRequest request = new FraudRequest(
                 "tx-test",
-                new FraudRequest.Transaction(15000.0, 20, LocalDateTime.of(2026, 3, 14, 5, 15, 12)),
+                new FraudRequest.Transaction(15000.0, 20, time(2026, 3, 14, 5, 15, 12)),
                 new FraudRequest.Customer(100.0, 30, List.of("MERC-001")),
                 new FraudRequest.Merchant("MERC-099", "5411", 15000.0),
                 new FraudRequest.Terminal(true, false, 2000.0),
@@ -115,7 +116,7 @@ class FraudControllerTest {
     void normalize_knownMerchant_unknownMerchantFlag() {
         FraudRequest withKnown = new FraudRequest(
                 "tx-test",
-                new FraudRequest.Transaction(100.0, 1, LocalDateTime.of(2026, 3, 14, 12, 0, 0)),
+                new FraudRequest.Transaction(100.0, 1, time(2026, 3, 14, 12, 0, 0)),
                 new FraudRequest.Customer(100.0, 1, List.of("MERC-001")),
                 new FraudRequest.Merchant("MERC-001", "5411", 100.0),
                 new FraudRequest.Terminal(true, true, 10.0),
@@ -124,7 +125,7 @@ class FraudControllerTest {
 
         FraudRequest withUnknown = new FraudRequest(
                 "tx-test",
-                new FraudRequest.Transaction(100.0, 1, LocalDateTime.of(2026, 3, 14, 12, 0, 0)),
+                new FraudRequest.Transaction(100.0, 1, time(2026, 3, 14, 12, 0, 0)),
                 new FraudRequest.Customer(100.0, 1, List.of("MERC-001")),
                 new FraudRequest.Merchant("MERC-099", "5411", 100.0),
                 new FraudRequest.Terminal(true, true, 10.0),
@@ -136,5 +137,42 @@ class FraudControllerTest {
 
         assertEquals(0.0f, known[11]);
         assertEquals(1.0f, unknown[11]);
+    }
+
+    @Test
+    void normalize_lastTransaction_usesPositiveMinutesBetweenLastAndCurrent() {
+        FraudRequest request = new FraudRequest(
+                "tx-smoke-001",
+                new FraudRequest.Transaction(384.88, 3, time(2026, 3, 11, 20, 23, 35)),
+                new FraudRequest.Customer(769.76, 3, List.of("MERC-009", "MERC-001", "MERC-001")),
+                new FraudRequest.Merchant("MERC-001", "5912", 298.95),
+                new FraudRequest.Terminal(false, true, 13.7090520965),
+                new FraudRequest.LastTransaction(time(2026, 3, 11, 14, 58, 35), 18.8626479774)
+        );
+
+        float[] result = controller.normalize14Dimensions(request);
+
+        assertEquals(325.0f / 1440.0f, result[5], 0.001);
+        assertEquals(0.0189f, result[6], 0.001);
+    }
+
+    @Test
+    void normalize_amountVsAvg_defaultsToOneWhenCustomerAverageIsZero() {
+        FraudRequest request = new FraudRequest(
+                "tx-test",
+                new FraudRequest.Transaction(100.0, 1, time(2026, 3, 14, 12, 0, 0)),
+                new FraudRequest.Customer(0.0, 1, List.of("MERC-001")),
+                new FraudRequest.Merchant("MERC-001", "5411", 100.0),
+                new FraudRequest.Terminal(true, true, 10.0),
+                null
+        );
+
+        float[] result = controller.normalize14Dimensions(request);
+
+        assertEquals(1.0f, result[2]);
+    }
+
+    private static OffsetDateTime time(int year, int month, int day, int hour, int minute, int second) {
+        return OffsetDateTime.of(year, month, day, hour, minute, second, 0, ZoneOffset.UTC);
     }
 }

@@ -2,7 +2,7 @@ package com.abrxu.fraud_detection_rinha.controller;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 public record FraudRequest(
@@ -16,7 +16,7 @@ public record FraudRequest(
     public record Transaction(
             double amount,
             int installments,
-            @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]X") LocalDateTime requested_at
+            @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]X") OffsetDateTime requested_at
     ) {}
 
     public record Customer(
@@ -38,7 +38,7 @@ public record FraudRequest(
     ) {}
 
     public record LastTransaction(
-            @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]X") LocalDateTime timestamp,
+            @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]X") OffsetDateTime timestamp,
             double km_from_current
     ) {}
 }

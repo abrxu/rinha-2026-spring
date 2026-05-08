@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 
 @RestController
@@ -46,14 +48,18 @@ public class FraudController {
 
         dims[0] = clamp(request.transaction().amount() / maxAmount);
         dims[1] = clamp((double) request.transaction().installments() / maxInstallments);
-        dims[2] = clamp((request.transaction().amount() / request.customer().avg_amount()) / amountVsAvgRatio);
-        dims[3] = (float) request.transaction().requested_at().getHour() / 23.0f;
-        dims[4] = (float) (request.transaction().requested_at().getDayOfWeek().getValue() - 1) / 6.0f;
+        dims[2] = request.customer().avg_amount() > 0.0
+                ? clamp((request.transaction().amount() / request.customer().avg_amount()) / amountVsAvgRatio)
+                : 1.0f;
+
+        OffsetDateTime requestedAtUtc = request.transaction().requested_at().withOffsetSameInstant(ZoneOffset.UTC);
+        dims[3] = (float) requestedAtUtc.getHour() / 23.0f;
+        dims[4] = (float) (requestedAtUtc.getDayOfWeek().getValue() - 1) / 6.0f;
 
         if (request.last_transaction() != null) {
             long minutes = ChronoUnit.MINUTES.between(
-                    request.transaction().requested_at(),
-                    request.last_transaction().timestamp()
+                    request.last_transaction().timestamp().toInstant(),
+                    request.transaction().requested_at().toInstant()
             );
             dims[5] = clamp((double) minutes / maxMinutes);
             dims[6] = clamp(request.last_transaction().km_from_current() / maxKm);

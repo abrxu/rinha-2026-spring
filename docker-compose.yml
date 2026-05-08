@@ -18,7 +18,7 @@ services:
       - rinha
 
   api1:
-    build: .
+    image: ghcr.io/abrxu/rinha-2026-spring:latest
     platform: linux/amd64
     deploy:
       resources:
@@ -29,7 +29,7 @@ services:
       - rinha
 
   api2:
-    build: .
+    image: ghcr.io/abrxu/rinha-2026-spring:latest
     platform: linux/amd64
     deploy:
       resources:
