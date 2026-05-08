@@ -1,5 +1,6 @@
 package com.abrxu.fraud_detection_rinha.controller;
 
+import com.abrxu.fraud_detection_rinha.service.VectorStoreService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -7,21 +8,17 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.List;
 
 @RestController
 public class FraudController {
 
-    private static final int MAX_AMOUNT = 1000;
-    private static final int MAX_INSTALLMENTS = 1000;
-    private static final int AMOUNT_VS_AVG_RATIO = 10;
+    private static final double THRESHOLD = 0.6;
 
-    private static final int MAX_MINUTES = 1440;
-    private static final double MAX_KM = 1000;
+    private final VectorStoreService vectorStore;
 
-    private static final int MAX_TX_COUNT_24H = 20;
-    private static final int MAX_MERCHANT_AVG_AMOUNT = 10000;
+    public FraudController(VectorStoreService vectorStore) {
+        this.vectorStore = vectorStore;
+    }
 
     @GetMapping("/ready")
     public ResponseEntity<Void> ready() {
@@ -30,94 +27,55 @@ public class FraudController {
 
     @PostMapping("/fraud-score")
     public ResponseEntity<FraudResponse> detect(@RequestBody FraudRequest request) {
-        List<Number> normalizedDimensions = normalize14Dimensions(request);
-
-        return ResponseEntity.ok(new FraudResponse(true, 2.0));
+        float[] vector = normalize14Dimensions(request);
+        double fraudScore = vectorStore.computeFraudScore(vector);
+        boolean approved = fraudScore < THRESHOLD;
+        return ResponseEntity.ok(new FraudResponse(approved, fraudScore));
     }
 
-    public List<Number> normalize14Dimensions(FraudRequest request) {
-        List<Number> response = new ArrayList<>();
+    float[] normalize14Dimensions(FraudRequest request) {
+        float[] dims = new float[14];
 
-        List<Double> valuesFromTransactionNormalization = transactionNormalization(request);
-        response.addAll(valuesFromTransactionNormalization);
+        float maxAmount = vectorStore.getNormalizationConstant("max_amount");
+        float maxInstallments = vectorStore.getNormalizationConstant("max_installments");
+        float amountVsAvgRatio = vectorStore.getNormalizationConstant("amount_vs_avg_ratio");
+        float maxMinutes = vectorStore.getNormalizationConstant("max_minutes");
+        float maxKm = vectorStore.getNormalizationConstant("max_km");
+        float maxTxCount24h = vectorStore.getNormalizationConstant("max_tx_count_24h");
+        float maxMerchantAvgAmount = vectorStore.getNormalizationConstant("max_merchant_avg_amount");
 
-        List<Double> valuesFromLastTransaction = (request.last_transaction() != null)
-                ? (lastTransactionsNormalization(request))
-                : List.of(-1.0, -1.0);
-        response.addAll(valuesFromLastTransaction);
+        dims[0] = clamp(request.transaction().amount() / maxAmount);
+        dims[1] = clamp((double) request.transaction().installments() / maxInstallments);
+        dims[2] = clamp((request.transaction().amount() / request.customer().avg_amount()) / amountVsAvgRatio);
+        dims[3] = (float) request.transaction().requested_at().getHour() / 23.0f;
+        dims[4] = (float) (request.transaction().requested_at().getDayOfWeek().getValue() - 1) / 6.0f;
 
-        double normalizedKmFromHome = limitDouble(request.terminal().km_from_home(), MAX_KM);
-        response.add(normalizedKmFromHome);
+        if (request.last_transaction() != null) {
+            long minutes = ChronoUnit.MINUTES.between(
+                    request.transaction().requested_at(),
+                    request.last_transaction().timestamp()
+            );
+            dims[5] = clamp((double) minutes / maxMinutes);
+            dims[6] = clamp(request.last_transaction().km_from_current() / maxKm);
+        } else {
+            dims[5] = -1.0f;
+            dims[6] = -1.0f;
+        }
 
-        double normalizedLast24HoursTransactions = limitDouble(request.customer().tx_count_24h(), MAX_TX_COUNT_24H);
-        response.add(normalizedLast24HoursTransactions);
+        dims[7] = clamp(request.terminal().km_from_home() / maxKm);
+        dims[8] = clamp((double) request.customer().tx_count_24h() / maxTxCount24h);
+        dims[9] = request.terminal().is_online() ? 1.0f : 0.0f;
+        dims[10] = request.terminal().card_present() ? 1.0f : 0.0f;
+        dims[11] = request.customer().known_merchants().contains(request.merchant().id()) ? 0.0f : 1.0f;
+        dims[12] = vectorStore.getMccRisk(request.merchant().mcc());
+        dims[13] = clamp(request.merchant().avg_amount() / maxMerchantAvgAmount);
 
-        int terminalIsOnline = request.terminal().is_online() ? 1 : 0;
-        response.add(terminalIsOnline);
-
-        int cardIsPresent = request.terminal().card_present() ? 1 : 0;
-        response.add(cardIsPresent);
-
-        int unknwonMerchant = request.customer().known_merchants()
-                .contains(request.merchant().id()) ? 0 : 1;
-        response.add(unknwonMerchant);
-
-        double mccRisk = 0.5; // TODO: PEGAR DO mcc_risk.json, valor default é 0.5 caso não estiver lá
-        response.add(mccRisk);
-
-        double merchantAverageAmount = limitDouble(request.merchant().avg_amount(), MAX_MERCHANT_AVG_AMOUNT);
-        response.add(merchantAverageAmount);
-
-        return response;
+        return dims;
     }
 
-    public List<Double> transactionNormalization(FraudRequest request) {
-        double normalizedAmount = limitDouble(request.transaction().amount(), MAX_AMOUNT);
-        double normalizedInstallments = limitInt(request.transaction().installments(), MAX_INSTALLMENTS);
-        double normalizedAmountVersusAverage = limitDouble(
-                (request.transaction().amount() / request.customer().avg_amount()),
-                AMOUNT_VS_AVG_RATIO
-        );
-        double normalizedDayHour = request.transaction().requested_at().getHour() / 23.0;
-        double normalizedDayOfWeek = (request.transaction().requested_at().getDayOfWeek().getValue() - 1) / 6.0;
-
-        return List.of(
-                normalizedAmount,
-                normalizedInstallments,
-                normalizedAmountVersusAverage,
-                normalizedDayHour,
-                normalizedDayOfWeek
-        );
+    private static float clamp(double value) {
+        if (value <= 0.0) return 0.0f;
+        if (value >= 1.0) return 1.0f;
+        return (float) value;
     }
-
-    public List<Double> lastTransactionsNormalization(FraudRequest request) {
-        int minutesFromLastTransaction = (int) ChronoUnit.MINUTES
-                .between(request.transaction().requested_at(), request.last_transaction().timestamp());
-
-        return List.of(
-                limitInt(minutesFromLastTransaction, MAX_MINUTES),
-                limitDouble(request.last_transaction().km_from_current(), MAX_KM)
-        );
-    }
-
-    public double limitDouble(double requested, double limit) {
-        double limitedValue = (requested / limit);
-
-        if (limitedValue >= 1.0) return 1.0;
-        if (limitedValue <= 0) return 0.0;
-
-        return limitedValue;
-    }
-
-    public double limitInt(int requested, int limit) {
-        int limitedValue = (requested / limit);
-
-        if (limitedValue >= 1) return 1;
-        if (limitedValue <= 0) return 0;
-
-        return limitedValue;
-    }
-
 }
-
-

@@ -1,0 +1,7 @@
+{
+    "participants": ["abrxu"],
+    "social": ["https://github.com/abrxu"],
+    "source-code-repo": "https://github.com/abrxu/fraud-detection-rinha-spring",
+    "stack": ["java", "spring-boot", "graalvm", "nginx"],
+    "open_to_work": false
+}

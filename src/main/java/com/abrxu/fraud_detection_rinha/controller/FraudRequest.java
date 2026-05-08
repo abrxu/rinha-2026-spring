@@ -1,9 +1,10 @@
 package com.abrxu.fraud_detection_rinha.controller;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+
 import java.time.LocalDateTime;
 import java.util.List;
 
-// TODO: ver se wrapper classes ou primitivos vão ser mais performáticos
 public record FraudRequest(
         String id,
         Transaction transaction,
@@ -12,39 +13,32 @@ public record FraudRequest(
         Terminal terminal,
         LastTransaction last_transaction
 ) {
+    public record Transaction(
+            double amount,
+            int installments,
+            @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]X") LocalDateTime requested_at
+    ) {}
 
-}
+    public record Customer(
+            double avg_amount,
+            int tx_count_24h,
+            List<String> known_merchants
+    ) {}
 
-record Transaction(
-        double amount,
-        int installments,
-        LocalDateTime requested_at
-) {
-}
+    public record Merchant(
+            String id,
+            String mcc,
+            double avg_amount
+    ) {}
 
-record Customer(
-        double avg_amount,
-        int tx_count_24h,
-        List<String> known_merchants // TODO: ver se List vai ser o mais performático
-) {
-}
+    public record Terminal(
+            boolean is_online,
+            boolean card_present,
+            double km_from_home
+    ) {}
 
-record Merchant(
-        String id,
-        String mcc,
-        double avg_amount
-        ) {
-}
-
-record Terminal(
-        boolean is_online,
-        boolean card_present,
-        double km_from_home
-) {
-}
-
-record LastTransaction(
-        LocalDateTime timestamp,
-        double km_from_current
-) {
+    public record LastTransaction(
+            @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss[.SSS]X") LocalDateTime timestamp,
+            double km_from_current
+    ) {}
 }
