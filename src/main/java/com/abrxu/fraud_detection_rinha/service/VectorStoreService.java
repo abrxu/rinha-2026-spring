@@ -1,17 +1,12 @@
 package com.abrxu.fraud_detection_rinha.service;
 
-import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.MapType;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.util.Map;
-import java.util.zip.GZIPInputStream;
 
 @Service
 public class VectorStoreService {
@@ -27,19 +22,17 @@ public class VectorStoreService {
     private float[] centroids;
     private int[] clusterOffsets;
     private int[] clusterCounts;
-    private int[] vectorToCluster;
 
     private Map<String, Float> mccRisk;
     private Map<String, Float> normalizationConstants;
 
-    private final JsonFactory jsonFactory = new JsonFactory();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostConstruct
     public void init() throws IOException {
         loadNormalizationConstants();
         loadMccRisk();
-        loadReferences();
+        loadIndex();
     }
 
     private void loadNormalizationConstants() throws IOException {
@@ -64,162 +57,47 @@ public class VectorStoreService {
         }
     }
 
-    private void loadReferences() throws IOException {
-        float[] vectors = new float[NUM_VECTORS * DIMENSIONS];
-        labels = new byte[NUM_VECTORS];
+    private void loadIndex() throws IOException {
+        try (InputStream is = getClass().getClassLoader().getResourceAsStream("index.bin");
+             BufferedInputStream bis = new BufferedInputStream(is);
+             DataInputStream dis = new DataInputStream(bis)) {
 
-        InputStream rawStream = getClass().getClassLoader().getResourceAsStream("references.json.gz");
-        if (rawStream == null) {
-            throw new IllegalStateException("references.json.gz not found in classpath");
-        }
-
-        try (GZIPInputStream gzis = new GZIPInputStream(rawStream);
-             JsonParser parser = jsonFactory.createParser(gzis)) {
-
-            JsonToken token = parser.nextToken();
-            if (token != JsonToken.START_ARRAY) {
-                throw new IllegalStateException("Expected START_ARRAY, got " + token);
+            byte[] magic = new byte[5];
+            dis.readFully(magic);
+            if (magic[0] != 'R' || magic[1] != 'I' || magic[2] != 'N' || magic[3] != 'H' || magic[4] != 'A') {
+                throw new IllegalStateException("Invalid index file");
             }
 
-            int vectorIndex = 0;
-            int labelIndex = 0;
-
-            while (parser.nextToken() != JsonToken.END_ARRAY) {
-                if (parser.currentToken() != JsonToken.START_OBJECT) {
-                    parser.skipChildren();
-                    continue;
-                }
-
-                float[] vector = new float[DIMENSIONS];
-                byte label = 0;
-
-                while (parser.nextToken() != JsonToken.END_OBJECT) {
-                    String fieldName = parser.currentName();
-                    if ("vector".equals(fieldName)) {
-                        parser.nextToken();
-                        for (int i = 0; i < DIMENSIONS; i++) {
-                            parser.nextToken();
-                            vector[i] = (float) parser.getDoubleValue();
-                        }
-                        parser.nextToken();
-                    } else if ("label".equals(fieldName)) {
-                        parser.nextToken();
-                        label = "fraud".equals(parser.getText()) ? (byte) 1 : (byte) 0;
-                    }
-                }
-
-                System.arraycopy(vector, 0, vectors, vectorIndex, DIMENSIONS);
-                vectorIndex += DIMENSIONS;
-                labels[labelIndex++] = label;
-            }
-        }
-
-        buildIndex(vectors);
-    }
-
-    private void buildIndex(float[] vectors) {
-        selectCentroids(vectors);
-        assignClusters(vectors);
-        reorderVectors(vectors);
-    }
-
-    private void selectCentroids(float[] vectors) {
-        centroids = new float[NUM_CENTROIDS * DIMENSIONS];
-
-        java.util.Random random = new java.util.Random(42);
-        int firstIdx = random.nextInt(NUM_VECTORS);
-        System.arraycopy(vectors, firstIdx * DIMENSIONS, centroids, 0, DIMENSIONS);
-
-        double[] minDist = new double[NUM_VECTORS];
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            minDist[i] = squaredDistance(vectors, i, centroids, 0);
-        }
-
-        for (int c = 1; c < NUM_CENTROIDS; c++) {
-            double totalWeight = 0;
-            for (int i = 0; i < NUM_VECTORS; i++) totalWeight += minDist[i];
-
-            double r = random.nextDouble() * totalWeight;
-            double cumulative = 0;
-            int selected = 0;
-            for (int i = 0; i < NUM_VECTORS; i++) {
-                cumulative += minDist[i];
-                if (cumulative >= r) {
-                    selected = i;
-                    break;
-                }
+            int version = dis.readByte();
+            if (version != 1) {
+                throw new IllegalStateException("Unsupported index version: " + version);
             }
 
-            System.arraycopy(vectors, selected * DIMENSIONS, centroids, c * DIMENSIONS, DIMENSIONS);
+            int nv = dis.readInt();
+            int dims = dis.readInt();
+            int nc = dis.readInt();
 
-            for (int i = 0; i < NUM_VECTORS; i++) {
-                double dist = squaredDistance(vectors, i, centroids, c);
-                if (dist < minDist[i]) {
-                    minDist[i] = dist;
-                }
-            }
-        }
-    }
+            quantizedVectors = new byte[nv * dims];
+            dis.readFully(quantizedVectors);
 
-    private void assignClusters(float[] vectors) {
-        vectorToCluster = new int[NUM_VECTORS];
-        clusterCounts = new int[NUM_CENTROIDS];
+            labels = new byte[nv];
+            dis.readFully(labels);
 
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            int bestCluster = 0;
-            double bestDist = Double.MAX_VALUE;
-
-            for (int c = 0; c < NUM_CENTROIDS; c++) {
-                double dist = squaredDistance(vectors, i, centroids, c);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    bestCluster = c;
-                }
+            centroids = new float[nc * dims];
+            for (int i = 0; i < centroids.length; i++) {
+                centroids[i] = dis.readFloat();
             }
 
-            vectorToCluster[i] = bestCluster;
-            clusterCounts[bestCluster]++;
-        }
-
-        clusterOffsets = new int[NUM_CENTROIDS];
-        int offset = 0;
-        for (int c = 0; c < NUM_CENTROIDS; c++) {
-            clusterOffsets[c] = offset;
-            offset += clusterCounts[c];
-        }
-    }
-
-    private void reorderVectors(float[] vectors) {
-        quantizedVectors = new byte[NUM_VECTORS * DIMENSIONS];
-        int[] clusterPos = new int[NUM_CENTROIDS];
-        System.arraycopy(clusterOffsets, 0, clusterPos, 0, NUM_CENTROIDS);
-
-        byte[] newLabels = new byte[NUM_VECTORS];
-
-        for (int i = 0; i < NUM_VECTORS; i++) {
-            int cluster = vectorToCluster[i];
-            int pos = clusterPos[cluster]++;
-            int srcOffset = i * DIMENSIONS;
-            int dstOffset = pos * DIMENSIONS;
-
-            for (int d = 0; d < DIMENSIONS; d++) {
-                quantizedVectors[dstOffset + d] = quantize(vectors[srcOffset + d]);
+            clusterOffsets = new int[nc];
+            for (int i = 0; i < nc; i++) {
+                clusterOffsets[i] = dis.readInt();
             }
-            newLabels[pos] = labels[i];
+
+            clusterCounts = new int[nc];
+            for (int i = 0; i < nc; i++) {
+                clusterCounts[i] = dis.readInt();
+            }
         }
-
-        System.arraycopy(newLabels, 0, labels, 0, NUM_VECTORS);
-    }
-
-    private static byte quantize(float value) {
-        int q = (int) Math.round((value + 1.0f) * 127.5f);
-        if (q < 0) q = 0;
-        if (q > 255) q = 255;
-        return (byte) (q - 128);
-    }
-
-    private static int dequantize(byte q) {
-        return q & 0xFF;
     }
 
     public float getNormalizationConstant(String key) {
@@ -313,15 +191,10 @@ public class VectorStoreService {
         return (double) fraudCount / K;
     }
 
-    private static double squaredDistance(float[] vectors, int vecIdx, float[] centroids, int centroidIdx) {
-        double dist = 0.0;
-        int vecOffset = vecIdx * DIMENSIONS;
-        int centroidOffset = centroidIdx * DIMENSIONS;
-        for (int d = 0; d < DIMENSIONS; d++) {
-            float diff = vectors[vecOffset + d] - centroids[centroidOffset + d];
-            dist += diff * diff;
-        }
-        return dist;
+    private static byte quantize(float value) {
+        int q = (int) Math.round((value + 1.0f) * 127.5f);
+        if (q < 0) q = 0;
+        if (q > 255) q = 255;
+        return (byte) (q - 128);
     }
-
 }

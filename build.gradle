@@ -29,6 +29,23 @@ tasks.named('test') {
 	useJUnitPlatform()
 }
 
+task buildIndex(type: JavaExec) {
+	dependsOn compileJava, processResources
+	classpath = sourceSets.main.compileClasspath + sourceSets.main.output.classesDirs
+	mainClass = 'com.abrxu.fraud_detection_rinha.IndexBuilder'
+	args = [
+		'build/resources/main/references.json.gz',
+		'build/resources/main/index.bin'
+	]
+	jvmArgs = ['-Xmx512m']
+}
+
+classes.dependsOn buildIndex
+
+bootJar {
+	exclude 'references.json.gz'
+}
+
 graalvmNative {
 	binaries {
 		main {
